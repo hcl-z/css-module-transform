@@ -19,11 +19,13 @@ const combineCode = [
   'combineCode transform',
   `<div className='class1 class2'>Hello</div>`,
   "<div className={`${style['class1']} ${style['class2']}`}>Hello</div>;",
+  `<div className='class1 class2'>Hello</div>`,
 ];
 const tsxCode = [
   'tsxCode transform',
   "<div className={'class1 class2'}>Hello</div>",
   "<div className={`${style['class1']} ${style['class2']}`}>Hello</div>;",
+  "<div className='class1 class2'>Hello</div>",
 ];
 const ternaryCode = [
   'ternaryCode transform',
@@ -39,6 +41,7 @@ const valClassCode = [
   'valClassCode transform',
   '<div className={`${value}`}>Hello</div>',
   '<div className={style[value]}>Hello</div>;',
+  '<div className={value}>Hello</div>',
 ];
 const mixValClassCode = [
   'mixValClassCode transform',
@@ -46,14 +49,14 @@ const mixValClassCode = [
   "<div className={`${style[value]} ${style['class1']}`}>Hello</div>;",
 ];
 const mixTernaryClassCode = [
-  'mixValClassCode transform',
-  '<div className={`${true?value:value1} class1`}>Hello</div>',
+  'mixTernaryClassCode transform',
+  '<div className={`${true ? value : value1} class1`}>Hello</div>',
   "<div className={`${true ? style[value] : style[value1]} ${style['class1']}`}>Hello</div>;",
 ];
 
 const classnameFuncClassCode = [
-  'mixValClassCode transform',
-  '<div className={classname("class1")}>Hello</div>',
+  'classnameFuncClassCode',
+  "<div className={classname('class1')}>Hello</div>",
   "<div className={classname(style['class1'])}>Hello</div>;",
 ];
 
@@ -84,11 +87,11 @@ describe('transform Test', () => {
 
   describe.each(testArr)(
     'transformCSSModuleToClassName Test - %s',
-    (name, expected, input) => {
+    (name, expected, input, _expected) => {
       it(`${name}`, () => {
         const result = transformCSSModuleToClass(input);
         expect(result.trim().replace(';', '')).toBe(
-          expected.trim().replace(';', ''),
+          (_expected || expected).trim().replace(';', ''),
         );
       });
     },

@@ -1,14 +1,18 @@
 import ts, {
   CallExpression,
   ConditionalExpression,
+  ElementAccessExpression,
   Expression,
   JsxExpression,
   StringLiteral,
   SyntaxKind,
   TemplateSpan,
   isConditionalExpression,
+  isElementAccessExpression,
   isIdentifier,
   isStringLiteral,
+  isTemplateExpression,
+  transpileModule,
 } from 'typescript';
 import { ignorePrefixTest } from './util';
 
@@ -366,86 +370,108 @@ export function transformCSSModuleToClass(
           parseConditionExpression(className as ConditionalExpression),
         );
       case SyntaxKind.TemplateExpression:
-        return parseTemplateExpression(className as ts.TemplateExpression);
+        return parseTemplateExpression(
+          className as ts.TemplateExpression,
+        ) as JsxExpression;
       case SyntaxKind.CallExpression:
         return parseCallExpression(className as ts.CallExpression);
       case SyntaxKind.ElementAccessExpression:
-        return parseElementAccessExpression(
+        let res = parseElementAccessExpression(
           className as ts.ElementAccessExpression,
         );
+        return typeof res === 'string'
+          ? res
+          : ts.factory.createJsxExpression(undefined, res);
       default:
         return;
     }
   }
 
-  function parseElementAccessExpression(node: ts.ElementAccessExpression) {
+  function parseElementAccessExpression(
+    node: ts.ElementAccessExpression,
+    needExpression = false,
+  ) {
     const argumentExpression = node.argumentExpression;
     const expression = node.expression;
     // 确定是CSS模块的写法
-    if (expression.getText() === importName) {
+    if (expression.getText().trim() === importName) {
       if (ts.isStringLiteral(argumentExpression)) {
-        return ts.factory.createStringLiteral(argumentExpression.text, true);
+        return needExpression
+          ? ts.factory.createStringLiteral(argumentExpression.text, true)
+          : argumentExpression.text;
       } else {
+        return argumentExpression;
       }
+    } else {
+      return node;
     }
   }
 
-  function parseCallExpression(className: CallExpression) {}
+  function parseCallExpression(className: CallExpression) {
+    const res: Expression[] = className.arguments.map((item) => {
+      const parsed = parseExpressionClass(item);
+      if (typeof parsed === 'string') {
+        return ts.factory.createStringLiteral(parsed, true);
+      } else {
+        return parsed?.expression!;
+      }
+    });
+
+    return ts.factory.createJsxExpression(
+      undefined,
+      ts.factory.createCallExpression(className.expression, undefined, res),
+    );
+  }
 
   function parseTemplateSpan(span: TemplateSpan) {
     switch (span.expression.kind) {
-      case SyntaxKind.Identifier:
-        return [createAccessExpression(span.expression.getText(), true)];
+      case SyntaxKind.ElementAccessExpression:
+        return parseElementAccessExpression(
+          span.expression as ElementAccessExpression,
+        );
       case SyntaxKind.ConditionalExpression:
-        return [
-          parseConditionExpression(span.expression as ConditionalExpression),
-        ];
+        return parseConditionExpression(
+          span.expression as ConditionalExpression,
+        );
       default:
-        return [span.expression];
+        return span.expression;
     }
   }
 
-  function parseTemplateExpression(templateExpression: ts.TemplateExpression) {
+  function parseTemplateExpression(
+    templateExpression: ts.TemplateExpression,
+    needExpression = false,
+  ) {
     let arr: (string | Expression)[] = [];
-    if (
-      templateExpression.head.rawText &&
-      !ignorePrefixTest(templateExpression.head.rawText)
-    ) {
+    if (!!templateExpression.head.rawText?.trim()) {
       arr.push(...(templateExpression.head.rawText?.trim().split(/\s+/) || []));
     }
 
     templateExpression.templateSpans.forEach((span) => {
-      arr.push(...parseTemplateSpan(span));
-      if (span.literal.rawText && !ignorePrefixTest(span.literal.rawText)) {
+      let parsed = parseTemplateSpan(span);
+      parsed && arr.push(parsed);
+      if (!!span.literal.rawText?.trim()) {
         arr.push(...(span.literal.rawText?.trim().split(/\s+/) || []));
       }
     });
-    if (
-      arr.length === 1 &&
-      typeof arr[0] !== 'string' &&
-      ts.isElementAccessExpression(arr[0])
-    ) {
-      return ts.factory.createJsxExpression(undefined, arr[0]);
+
+    if (arr.every((item) => typeof item === 'string')) {
+      return needExpression
+        ? ts.factory.createStringLiteral(arr.join(' '), true)
+        : arr.join(' ');
     }
+    if (needExpression) {
+      return supportClassnames
+        ? createFunctionExpression(arr)
+        : createTemplateString(arr);
+    }
+
     return ts.factory.createJsxExpression(
       undefined,
       supportClassnames
         ? createFunctionExpression(arr)
         : createTemplateString(arr),
     );
-  }
-
-  function createAccessExpression(className: string, isVariable = false) {
-    const stylesIdentifier = ts.factory.createIdentifier(importName);
-    const classLiteral = isVariable
-      ? ts.factory.createIdentifier(className)
-      : ts.factory.createStringLiteral(className, true);
-    const elementAccess = ts.factory.createElementAccessExpression(
-      stylesIdentifier,
-      classLiteral,
-    );
-
-    return elementAccess;
   }
 
   function parseConditionExpression(expression: ConditionalExpression) {
@@ -460,21 +486,30 @@ export function transformCSSModuleToClass(
       whenFalse = parseConditionExpression(expression.whenFalse);
     }
 
-    if (isStringLiteral(expression.whenTrue)) {
-      const exp = parseStringClass(expression.whenTrue.getText().slice(1, -1));
-      whenTrue = exp.expression || expression.whenTrue;
+    if (isTemplateExpression(expression.whenTrue)) {
+      whenTrue = parseTemplateExpression(
+        expression.whenTrue,
+        true,
+      ) as Expression;
     }
 
-    if (isStringLiteral(expression.whenFalse)) {
-      const exp = parseStringClass(expression.whenFalse.getText().slice(1, -1));
-      whenFalse = exp.expression || expression.whenFalse;
+    if (isTemplateExpression(expression.whenFalse)) {
+      whenFalse = parseTemplateExpression(
+        expression.whenFalse,
+        true,
+      ) as Expression;
     }
-
-    if (isIdentifier(expression.whenTrue)) {
-      whenTrue = createAccessExpression(expression.whenTrue.getText(), true);
+    if (isElementAccessExpression(expression.whenTrue)) {
+      whenTrue = parseElementAccessExpression(
+        expression.whenTrue,
+        true,
+      ) as Expression;
     }
-    if (isIdentifier(expression.whenFalse)) {
-      whenFalse = createAccessExpression(expression.whenFalse.getText(), true);
+    if (isElementAccessExpression(expression.whenFalse)) {
+      whenFalse = parseElementAccessExpression(
+        expression.whenFalse,
+        true,
+      ) as Expression;
     }
 
     return ts.factory.createConditionalExpression(
@@ -490,9 +525,8 @@ export function transformCSSModuleToClass(
   function createFunctionExpression(variableNames: (string | Expression)[]) {
     const spans = variableNames.map((item, index) => {
       let expression: ts.Expression;
-      if (typeof item === 'string' && !ignorePrefixTest(item)) {
-        const variable = `${importName}['${item}']`;
-        expression = ts.factory.createIdentifier(variable);
+      if (typeof item === 'string') {
+        expression = ts.factory.createStringLiteral(item);
       } else {
         expression = item as Expression;
       }
@@ -502,94 +536,52 @@ export function transformCSSModuleToClass(
     return ts.factory.createCallExpression(funcIdentifer, undefined, spans);
   }
 
-  function createTemplateString(variableNames: (string | Expression)[]) {
-    // 创建模板头部
-    let templateHead = ts.factory.createTemplateHead('');
-    // 创建所有模板跨度
-    let spans: any[] = [];
-    variableNames.forEach((variable, index) => {
-      let expression: ts.Expression;
-      let templateChunk: ts.TemplateMiddle | ts.TemplateTail;
+  function createTemplateString(
+    elements: Array<string | ts.Expression>,
+  ): ts.TemplateLiteral {
+    // 如果第一个元素是字符串，则创建头部模板文字，否则创建空字符串头部模板文字并将表达式添加为第一个跨度
+    let headArr: string[] = [];
+    let curExp: Expression | null = null;
+    let head: ts.TemplateHead | null = null;
+    const spans: ts.TemplateSpan[] = [];
+    elements.forEach((element, index) => {
+      const isLast = index === elements.length - 1;
 
-      if (typeof variable === 'string') {
-        if (ignorePrefixTest(variable)) {
-          // 如果是第一个元素，创建模板头部，否则创建模板中间部分
-          if (index === 0) {
-            templateHead = ts.factory.createTemplateHead(variable + ' ');
-          } else {
-            // templateChunk = ts.factory.createTemplateMiddle(variable + ' ');
-          }
-        } else {
-          const variableAccess = `${importName}['${variable}']`;
-          expression = ts.factory.createIdentifier(variableAccess);
+      const literal = isLast
+        ? ts.factory.createTemplateTail('')
+        : ts.factory.createTemplateMiddle(headArr.join(' '));
 
-          // 根据位置创建模板中间部分或尾部
-          if (index === variableNames.length - 1) {
-            // 对于最后一个变量，创建模板尾部
-            templateChunk = ts.factory.createTemplateTail('');
-          } else {
-            // 对于中间变量，后面跟一个空格
-            templateChunk = ts.factory.createTemplateMiddle(' ');
-          }
-
-          // 创建模板跨度
-          const span = ts.factory.createTemplateSpan(expression, templateChunk);
-          spans.push(span);
-        }
+      if (typeof element === 'string') {
+        headArr.push(element);
       } else {
-        // 如果已经是表达式，直接使用
-        expression = variable;
-
-        // 根据位置创建模板中间部分或尾部
-        if (index === variableNames.length - 1) {
-          // 对于最后一个变量，创建模板尾部
-          templateChunk = ts.factory.createTemplateTail('');
-        } else {
-          // 对于中间变量，后面跟一个空格
-          templateChunk = ts.factory.createTemplateMiddle(' ');
+        if (curExp) {
+          spans.push(ts.factory.createTemplateSpan(curExp, literal));
+          return;
         }
 
-        // 创建模板跨度
-        const span = ts.factory.createTemplateSpan(expression, templateChunk);
-        spans.push(span);
+        if (!head) {
+          head = ts.factory.createTemplateHead(headArr.join(' '));
+        }
+        headArr = [];
+        curExp = element;
       }
     });
 
-    // 确保 templateHead 已经定义
-    if (!templateHead) {
-      templateHead = ts.factory.createTemplateHead('');
+    if (!head) {
+      head = ts.factory.createTemplateHead(headArr.join(' '));
     }
 
-    // 创建模板表达式
-    const templateExpression = ts.factory.createTemplateExpression(
-      templateHead,
-      spans,
-    );
-
-    // 返回完整的模板字符串表达式
-    return templateExpression;
-  }
-
-  function parseStringClass(className: string) {
-    const classArr = className.trim().split(/\s+/);
-
-    if (classArr.length === 1) {
-      if (ignorePrefixTest(classArr[0])) {
-        return ts.factory.createJsxExpression(
-          undefined,
-          ts.factory.createStringLiteral(classArr[0], true),
-        );
-      } else {
-        return ts.factory.createJsxExpression(
-          undefined,
-          createAccessExpression(className),
-        );
-      }
+    if (curExp) {
+      spans.push(
+        ts.factory.createTemplateSpan(
+          curExp,
+          ts.factory.createTemplateTail(
+            headArr.length === 0 ? '' : ' ' + headArr.join(' '),
+          ),
+        ),
+      );
     }
-    const expression = supportClassnames
-      ? createFunctionExpression(classArr)
-      : createTemplateString(classArr);
-    return ts.factory.createJsxExpression(undefined, expression);
+    return ts.factory.createTemplateExpression(head, spans);
   }
 
   function transformer(context: ts.TransformationContext) {
@@ -601,7 +593,7 @@ export function transformCSSModuleToClass(
             node.name.getText() === 'class')
         ) {
           if (!node.initializer) return node;
-          let transform: JsxExpression | StringLiteral | void;
+          let transform: any;
           if (ts.isJsxExpression(node.initializer)) {
             transform = parseExpressionClass(node.initializer.expression!);
           } else {
@@ -612,7 +604,9 @@ export function transformCSSModuleToClass(
             return context.factory.updateJsxAttribute(
               node,
               node.name,
-              transform as unknown as JsxExpression | StringLiteral,
+              typeof transform === 'string'
+                ? ts.factory.createStringLiteral(transform, true)
+                : transform,
             );
           }
         }
@@ -622,8 +616,3 @@ export function transformCSSModuleToClass(
     };
   }
 }
-// Test code
-const testCode =
-  "<div className={`${style['class1']} ${style['class2']}`}>Hello</div>";
-const res = transformCSSModuleToClass(testCode);
-console.log(res);

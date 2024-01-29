@@ -3,6 +3,7 @@ export interface Options {
     supportClassnames?: boolean;
     ignorePrefix?: (string | RegExp)[];
     exactMatch?: boolean;
+    onlyClassName?: boolean;
 }
 /**
  * 1. className="class1"
@@ -12,7 +13,7 @@ export interface Options {
  * 5. className={`${value1} class1`}
  * 6. className={isShow?'show':'hide'}
  */
-export declare function transformClassToCSSModule(sourceCode: string, options?: Options): string;
+export declare function transformClassToCSSModule(sourceCode: string, options?: Options): string | undefined;
 /**
  * 1. className={style['class1']}
  * 2. className={classnames(style['class1'],style['class2'])}
@@ -22,5 +23,5 @@ export declare function transformClassToCSSModule(sourceCode: string, options?: 
  * 6. className={isShow?style['show']:style['hide']}
  * 7. className={test+'class'}
  */
-export declare function transformCSSModuleToClass(sourceCode: string, options?: Options): string;
+export declare function transformCSSModuleToClass(sourceCode?: string, options?: Options): string | undefined;
 //# sourceMappingURL=index.d.ts.map

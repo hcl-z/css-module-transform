@@ -78,7 +78,7 @@ describe('options Test', () => {
         const result = transformClassToCSSModule(input, {
           supportClassnames: true,
         });
-        expect(result.trim()).toBe(expectedSupportClassnames.trim());
+        expect(result?.trim()).toBe(expectedSupportClassnames.trim());
       });
     },
   );
@@ -90,7 +90,7 @@ describe('options Test', () => {
         const result = transformClassToCSSModule(input, {
           ignorePrefix: ['class1'],
         });
-        expect(result.trim()).toBe(expectedIgnorePrefix.trim());
+        expect(result?.trim()).toBe(expectedIgnorePrefix.trim());
       });
     },
   );

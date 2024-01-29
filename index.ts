@@ -1,5 +1,4 @@
 import ts, {
-  BinaryExpression,
   CallExpression,
   ConditionalExpression,
   ElementAccessExpression,
@@ -26,6 +25,7 @@ export interface Options {
   supportClassnames?: boolean; // 三方库 classnames
   ignorePrefix?: (string | RegExp)[];
   exactMatch?: boolean;
+  onlyClassName?: boolean;
 }
 
 /**
@@ -36,28 +36,38 @@ export interface Options {
  * 5. className={`${value1} class1`}
  * 6. className={isShow?'show':'hide'}
  */
+
+const jsRegExp = new RegExp(/[a-zA-Z_$]+-[a-zA-Z0-9_$]+/);
 export function transformClassToCSSModule(
   sourceCode: string,
   options?: Options,
 ) {
-  // TODO options
   const {
     importName = 'style',
     exactMatch = true,
     supportClassnames = false,
     ignorePrefix,
+    onlyClassName
   } = options || {};
+
+  let source = sourceCode;
+
+  if (onlyClassName) {
+    source = `<div className=${sourceCode}></div>`;
+  }
+
+  if (!source) {
+    return;
+  }
+
   const sourceFile = ts.createSourceFile(
     '',
-    sourceCode,
+    source,
     ts.ScriptTarget.Latest,
     true,
     ts.ScriptKind.TSX,
   );
 
-  const printer = ts.createPrinter();
-  const result = ts.transform(sourceFile, [transformer]);
-  return printer.printFile(result.transformed[0] as any);
 
   function parseExpressionClass(className: Expression): ts.JsxExpression {
     switch (className.kind) {
@@ -113,12 +123,12 @@ export function transformClassToCSSModule(
     );
   }
   function parseCallExpression(className: ts.CallExpression) {
-    const args = className.arguments.map((arg) => {
-      return parseExpressionClass(arg).expression!;
-    });
+    // const args = className.arguments.map((arg) => {
+    //   return parseExpressionClass(arg).expression!;
+    // });
     return ts.factory.createJsxExpression(
       undefined,
-      ts.factory.createCallExpression(className.expression, undefined, args),
+      createAccessExpression(className)
     );
   }
 
@@ -179,13 +189,12 @@ export function transformClassToCSSModule(
     const stylesIdentifier = ts.factory.createIdentifier(importName);
     // className用横线连接的也返回style[className]
 
-    const jsRegExp = new RegExp(/[a-zA-Z_$]+-[a-zA-Z0-9_$]+/);
-    if (typeof className === 'string' && jsRegExp.test(className)) {
+    if (typeof className === 'string' && !jsRegExp.test(className)) {
       // create style.className
       return ts.factory.createPropertyAccessExpression(stylesIdentifier, className)
     } else {
       // create style[className]
-      const classNameExpression = typeof className === 'string' ? ts.factory.createStringLiteral(className) : className
+      const classNameExpression = typeof className === 'string' ? ts.factory.createStringLiteral(className, true) : className
       return ts.factory.createElementAccessExpression(stylesIdentifier, classNameExpression)
     }
   }
@@ -264,7 +273,8 @@ export function transformClassToCSSModule(
             // templateChunk = ts.factory.createTemplateMiddle(variable + ' ');
           }
         } else {
-          const variableAccess = `${importName}['${variable}']`;
+          !jsRegExp.test(variable)
+          const variableAccess = jsRegExp.test(variable) ? `${importName}['${variable}']` : `${importName}.${variable}`;
           expression = ts.factory.createIdentifier(variableAccess);
 
           // 根据位置创建模板中间部分或尾部
@@ -341,8 +351,7 @@ export function transformClassToCSSModule(
       function visit(node: ts.Node): ts.Node {
         if (
           ts.isJsxAttribute(node) &&
-          (node.name.getText() === 'className' ||
-            node.name.getText() === 'class')
+          (node.name.getText() === 'className')
         ) {
           if (!node.initializer) return node;
           let transform: JsxExpression | undefined;
@@ -360,13 +369,61 @@ export function transformClassToCSSModule(
               node.name,
               transform,
             );
-
           }
         }
         return ts.visitEachChild(node, visit, context);
       }
       return ts.visitNode(rootNode, visit);
     };
+  }
+
+  console.log('source', source)
+  function extractClassNames(sourceFile: ts.SourceFile) {
+    let classNames = sourceCode;
+
+    function visit(node: ts.Node) {
+      if (
+        ts.isJsxAttribute(node) &&
+        (node.name.getText() === 'className')
+      ) {
+        if (!node.initializer) {
+          console.log('error')
+          return;
+        }
+
+        let expression;
+
+        if (ts.isJsxExpression(node.initializer)) {
+          expression = parseExpressionClass(node.initializer.expression!)
+        } else if (ts.isStringLiteral(node.initializer)) {
+          expression = parseStringClass(node.initializer.text)
+        } else {
+          expression = node.initializer;
+        }
+
+        if (typeof expression === 'string') {
+          classNames = expression;
+        } else {
+          const printer = ts.createPrinter({ newLine: ts.NewLineKind.LineFeed });
+          // 将新的 Expression 节点转换为源码字符串
+          const newExpressionText = printer.printNode(ts.EmitHint.Unspecified, expression, sourceFile);
+          classNames = newExpressionText
+        }
+        // Continue visiting any child nodes
+      }
+      node.forEachChild(visit);
+    }
+
+    visit(sourceFile);
+    return classNames;
+  }
+
+  if (onlyClassName) {
+    return extractClassNames(sourceFile)
+  } else {
+    const printer = ts.createPrinter();
+    const result = ts.transform(sourceFile, [transformer]);
+    return printer.printFile(result.transformed[0] as any)
   }
 }
 
@@ -380,7 +437,7 @@ export function transformClassToCSSModule(
  * 7. className={test+'class'}
  */
 export function transformCSSModuleToClass(
-  sourceCode: string,
+  sourceCode?: string,
   options?: Options,
 ) {
   // TODO options
@@ -389,19 +446,18 @@ export function transformCSSModuleToClass(
     exactMatch = true,
     supportClassnames = false,
     ignorePrefix,
+    onlyClassName
   } = options || {};
 
-  const sourceFile = ts.createSourceFile(
-    '',
-    sourceCode,
-    ts.ScriptTarget.Latest,
-    true,
-    ts.ScriptKind.TSX,
-  );
+  let source = sourceCode;
 
-  const printer = ts.createPrinter();
-  const result = ts.transform(sourceFile, [transformer]);
-  return printer.printFile(result.transformed[0] as any);
+  if (onlyClassName) {
+    source = `<div className=${sourceCode}></div>`;
+  }
+
+  if (!source) {
+    return;
+  }
 
   function parseExpressionClass(className: Expression) {
     let res;
@@ -468,6 +524,8 @@ export function transformCSSModuleToClass(
     }
   }
 
+
+
   function parseCallExpression(className: CallExpression) {
     const res: Expression[] = className.arguments.map((item) => {
       const parsed = parseExpressionClass(item);
@@ -494,6 +552,10 @@ export function transformCSSModuleToClass(
         return parseConditionExpression(
           span.expression as ConditionalExpression,
         );
+      case SyntaxKind.PropertyAccessExpression:
+        return parsePropertyAccessExpression(
+          span.expression as PropertyAccessExpression,
+        )
       default:
         return span.expression;
     }
@@ -645,6 +707,34 @@ export function transformCSSModuleToClass(
     return ts.factory.createTemplateExpression(head, spans);
   }
 
+  function extractClassNames(sourceFile: ts.SourceFile) {
+    let classNames = sourceCode;
+    function visit(node: ts.Node) {
+      if (
+        ts.isJsxAttribute(node) &&
+        (node.name.getText() === 'className')) {
+        if (!node.initializer) {
+          return;
+        }
+        if (ts.isJsxExpression(node.initializer)) {
+          const expression = parseExpressionClass(node.initializer.expression!);
+          if (typeof expression === 'string') {
+            classNames = expression;
+          } else {
+            const printer = ts.createPrinter({ newLine: ts.NewLineKind.LineFeed });
+            // 将新的 Expression 节点转换为源码字符串
+            const newExpressionText = printer.printNode(ts.EmitHint.Unspecified, expression, sourceFile);
+            classNames = newExpressionText
+          }
+        }
+      }
+      node.forEachChild(visit);
+    }
+
+    visit(sourceFile);
+    return classNames;
+  }
+
   function transformer(context: ts.TransformationContext) {
     return (rootNode: ts.Node) => {
       function visit(node: ts.Node): ts.Node {
@@ -674,5 +764,30 @@ export function transformCSSModuleToClass(
       return ts.visitNode(rootNode, visit);
     };
   }
+
+  const sourceFile = ts.createSourceFile(
+    '',
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TSX,
+  );
+
+  if (onlyClassName) {
+    return extractClassNames(sourceFile);
+  } else {
+    const printer = ts.createPrinter();
+    const result = ts.transform(sourceFile, [transformer]);
+    return printer.printFile(result.transformed[0] as any)
+  }
+
+
 }
 
+// Test code
+const testCode =
+  "{`${style.class1} ${style.class2}`}";
+const res = transformCSSModuleToClass(testCode, {
+  onlyClassName: true
+});
+console.log(res);

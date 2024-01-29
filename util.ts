@@ -1,3 +1,5 @@
+import ts from "typescript";
+
 function escapeRegExp(str: string) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); // 转义特殊字符
 }
@@ -20,4 +22,13 @@ export function ignorePrefixTest(
       return false;
     }
   });
+}
+
+export function createJsxExpression(
+  expression: ts.Expression
+) {
+  return ts.factory.createJsxExpression(
+    undefined,
+    ts.factory.createJsxExpression(undefined, expression),
+  );
 }

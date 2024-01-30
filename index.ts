@@ -11,14 +11,11 @@ import ts, {
   isConditionalExpression,
   isElementAccessExpression,
   isIdentifier,
+  isPropertyAccessExpression,
   isStringLiteral,
-  isTemplateExpression
+  isTemplateExpression,
 } from 'typescript';
 import { ignorePrefixTest } from './util';
-
-
-//bad case
-// className = {`${style['logo']} ${stylessss['']} ${style['react']}`}
 
 export interface Options {
   importName?: string; // css module 文件的引用名
@@ -37,7 +34,7 @@ export interface Options {
  * 6. className={isShow?'show':'hide'}
  */
 
-const jsRegExp = new RegExp(/[a-zA-Z_$]+-[a-zA-Z0-9_$]+/);
+const jsRegExp = new RegExp(/[a-zA-Z0-9_$]+-[a-zA-Z0-9_$]+/);
 export function transformClassToCSSModule(
   sourceCode: string,
   options?: Options,
@@ -47,7 +44,7 @@ export function transformClassToCSSModule(
     exactMatch = true,
     supportClassnames = false,
     ignorePrefix,
-    onlyClassName
+    onlyClassName,
   } = options || {};
 
   let source = sourceCode;
@@ -67,7 +64,6 @@ export function transformClassToCSSModule(
     true,
     ts.ScriptKind.TSX,
   );
-
 
   function parseExpressionClass(className: Expression): ts.JsxExpression {
     switch (className.kind) {
@@ -90,36 +86,39 @@ export function transformClassToCSSModule(
       case SyntaxKind.PropertyAccessExpression:
         return parsePropertyAccessExpression(
           className as ts.PropertyAccessExpression,
-        )
-      default:
-        return ts.factory.createJsxExpression(
-          undefined,
-          ts.factory.createStringLiteral(''),
         );
+      default:
+        return ts.factory.createJsxExpression(undefined, className);
     }
   }
 
   function parsePropertyAccessExpression(
-    propertyAccessExpression: ts.PropertyAccessExpression
+    propertyAccessExpression: ts.PropertyAccessExpression,
   ) {
     if (propertyAccessExpression.expression.getText() === importName) {
-      return ts.factory.createJsxExpression(undefined, propertyAccessExpression)
+      return ts.factory.createJsxExpression(
+        undefined,
+        propertyAccessExpression,
+      );
     } else {
-      return ts.factory.createJsxExpression(undefined, createAccessExpression(propertyAccessExpression))
+      return ts.factory.createJsxExpression(
+        undefined,
+        createAccessExpression(propertyAccessExpression),
+      );
     }
-
   }
+
   function parseIdentifierClass(identifier: ts.Identifier) {
     return ts.factory.createJsxExpression(
       undefined,
-      createAccessExpression(identifier)
+      createAccessExpression(identifier),
     );
   }
 
   function parseBinaryExpression(binaryExpression: ts.BinaryExpression) {
     return ts.factory.createJsxExpression(
       undefined,
-      createAccessExpression(binaryExpression)
+      createAccessExpression(binaryExpression),
     );
   }
   function parseCallExpression(className: ts.CallExpression) {
@@ -128,7 +127,7 @@ export function transformClassToCSSModule(
     // });
     return ts.factory.createJsxExpression(
       undefined,
-      createAccessExpression(className)
+      createAccessExpression(className),
     );
   }
 
@@ -137,7 +136,11 @@ export function transformClassToCSSModule(
       case SyntaxKind.StringLiteral:
         return span.expression.getText().trim().split(/\s+/);
       case SyntaxKind.Identifier:
-        return [createAccessExpression(ts.factory.createIdentifier(span.expression.getText()))];
+        return [
+          createAccessExpression(
+            ts.factory.createIdentifier(span.expression.getText()),
+          ),
+        ];
       case SyntaxKind.ConditionalExpression:
         return [
           parseConditionExpression(span.expression as ConditionalExpression),
@@ -160,7 +163,7 @@ export function transformClassToCSSModule(
       arr.push(...(templateExpression.head.rawText?.trim().split(/\s+/) || []));
     }
 
-    templateExpression.templateSpans.forEach((span) => {
+    templateExpression.templateSpans.forEach((span: TemplateSpan) => {
       arr.push(...parseTemplateSpan(span));
       if (
         span.literal.rawText &&
@@ -184,18 +187,26 @@ export function transformClassToCSSModule(
     );
   }
 
-
   function createAccessExpression(className: string | ts.Expression) {
     const stylesIdentifier = ts.factory.createIdentifier(importName);
     // className用横线连接的也返回style[className]
 
     if (typeof className === 'string' && !jsRegExp.test(className)) {
       // create style.className
-      return ts.factory.createPropertyAccessExpression(stylesIdentifier, className)
+      return ts.factory.createPropertyAccessExpression(
+        stylesIdentifier,
+        className,
+      );
     } else {
       // create style[className]
-      const classNameExpression = typeof className === 'string' ? ts.factory.createStringLiteral(className, true) : className
-      return ts.factory.createElementAccessExpression(stylesIdentifier, classNameExpression)
+      const classNameExpression =
+        typeof className === 'string'
+          ? ts.factory.createStringLiteral(className, true)
+          : className;
+      return ts.factory.createElementAccessExpression(
+        stylesIdentifier,
+        classNameExpression,
+      );
     }
   }
 
@@ -222,10 +233,14 @@ export function transformClassToCSSModule(
     }
 
     if (isIdentifier(expression.whenTrue)) {
-      whenTrue = createAccessExpression(ts.factory.createIdentifier(expression.whenTrue.getText()));
+      whenTrue = createAccessExpression(
+        ts.factory.createIdentifier(expression.whenTrue.getText()),
+      );
     }
     if (isIdentifier(expression.whenFalse)) {
-      whenFalse = createAccessExpression(ts.factory.createIdentifier((expression.whenFalse.getText())))
+      whenFalse = createAccessExpression(
+        ts.factory.createIdentifier(expression.whenFalse.getText()),
+      );
     }
 
     return ts.factory.createConditionalExpression(
@@ -273,8 +288,9 @@ export function transformClassToCSSModule(
             // templateChunk = ts.factory.createTemplateMiddle(variable + ' ');
           }
         } else {
-          !jsRegExp.test(variable)
-          const variableAccess = jsRegExp.test(variable) ? `${importName}['${variable}']` : `${importName}.${variable}`;
+          const variableAccess = jsRegExp.test(variable)
+            ? `${importName}['${variable}']`
+            : `${importName}.${variable}`;
           expression = ts.factory.createIdentifier(variableAccess);
 
           // 根据位置创建模板中间部分或尾部
@@ -325,6 +341,12 @@ export function transformClassToCSSModule(
   }
 
   function parseStringClass(className: string) {
+    if (className.trim() === '') {
+      return ts.factory.createJsxExpression(
+        undefined,
+        ts.factory.createStringLiteral(className, true),
+      );
+    }
     const classArr = className.trim().split(/\s+/);
 
     if (classArr.length === 1) {
@@ -349,10 +371,7 @@ export function transformClassToCSSModule(
   function transformer(context: ts.TransformationContext) {
     return (rootNode: ts.Node) => {
       function visit(node: ts.Node): ts.Node {
-        if (
-          ts.isJsxAttribute(node) &&
-          (node.name.getText() === 'className')
-        ) {
+        if (ts.isJsxAttribute(node) && node.name.getText() === 'className') {
           if (!node.initializer) return node;
           let transform: JsxExpression | undefined;
           if (ts.isJsxExpression(node.initializer)) {
@@ -377,26 +396,21 @@ export function transformClassToCSSModule(
     };
   }
 
-  console.log('source', source)
   function extractClassNames(sourceFile: ts.SourceFile) {
     let classNames = sourceCode;
 
     function visit(node: ts.Node) {
-      if (
-        ts.isJsxAttribute(node) &&
-        (node.name.getText() === 'className')
-      ) {
+      if (ts.isJsxAttribute(node) && node.name.getText() === 'className') {
         if (!node.initializer) {
-          console.log('error')
           return;
         }
 
         let expression;
 
         if (ts.isJsxExpression(node.initializer)) {
-          expression = parseExpressionClass(node.initializer.expression!)
+          expression = parseExpressionClass(node.initializer.expression!);
         } else if (ts.isStringLiteral(node.initializer)) {
-          expression = parseStringClass(node.initializer.text)
+          expression = parseStringClass(node.initializer.text);
         } else {
           expression = node.initializer;
         }
@@ -404,10 +418,16 @@ export function transformClassToCSSModule(
         if (typeof expression === 'string') {
           classNames = expression;
         } else {
-          const printer = ts.createPrinter({ newLine: ts.NewLineKind.LineFeed });
+          const printer = ts.createPrinter({
+            newLine: ts.NewLineKind.LineFeed,
+          });
           // 将新的 Expression 节点转换为源码字符串
-          const newExpressionText = printer.printNode(ts.EmitHint.Unspecified, expression, sourceFile);
-          classNames = newExpressionText
+          const newExpressionText = printer.printNode(
+            ts.EmitHint.Unspecified,
+            expression,
+            sourceFile,
+          );
+          classNames = newExpressionText;
         }
         // Continue visiting any child nodes
       }
@@ -419,11 +439,11 @@ export function transformClassToCSSModule(
   }
 
   if (onlyClassName) {
-    return extractClassNames(sourceFile)
+    return extractClassNames(sourceFile);
   } else {
     const printer = ts.createPrinter();
     const result = ts.transform(sourceFile, [transformer]);
-    return printer.printFile(result.transformed[0] as any)
+    return printer.printFile(result.transformed[0] as any);
   }
 }
 
@@ -440,13 +460,12 @@ export function transformCSSModuleToClass(
   sourceCode?: string,
   options?: Options,
 ) {
-  // TODO options
   const {
     importName = 'style',
     exactMatch = true,
     supportClassnames = false,
     ignorePrefix,
-    onlyClassName
+    onlyClassName,
   } = options || {};
 
   let source = sourceCode;
@@ -482,7 +501,9 @@ export function transformCSSModuleToClass(
         );
         break;
       case SyntaxKind.PropertyAccessExpression:
-        res = parsePropertyAccessExpression(className as ts.PropertyAccessExpression);
+        res = parsePropertyAccessExpression(
+          className as ts.PropertyAccessExpression,
+        );
         break;
       // case SyntaxKind.BinaryExpression:
       default:
@@ -492,16 +513,13 @@ export function transformCSSModuleToClass(
     return typeof res === 'string' || ts.isJsxExpression(res)
       ? res
       : ts.factory.createJsxExpression(undefined, res);
-
   }
-
 
   function parsePropertyAccessExpression(className: PropertyAccessExpression) {
     if (className.expression.getText() !== importName) {
       return className;
     }
-
-    return className.name.text
+    return className.name.text;
   }
 
   function parseElementAccessExpression(
@@ -523,8 +541,6 @@ export function transformCSSModuleToClass(
       return node;
     }
   }
-
-
 
   function parseCallExpression(className: CallExpression) {
     const res: Expression[] = className.arguments.map((item) => {
@@ -555,7 +571,7 @@ export function transformCSSModuleToClass(
       case SyntaxKind.PropertyAccessExpression:
         return parsePropertyAccessExpression(
           span.expression as PropertyAccessExpression,
-        )
+        );
       default:
         return span.expression;
     }
@@ -570,7 +586,7 @@ export function transformCSSModuleToClass(
       arr.push(...(templateExpression.head.rawText?.trim().split(/\s+/) || []));
     }
 
-    templateExpression.templateSpans.forEach((span) => {
+    templateExpression.templateSpans.forEach((span: TemplateSpan) => {
       let parsed = parseTemplateSpan(span);
       parsed && arr.push(parsed);
       if (!!span.literal.rawText?.trim()) {
@@ -635,6 +651,21 @@ export function transformCSSModuleToClass(
       ) as Expression;
     }
 
+    if (isPropertyAccessExpression(expression.whenTrue)) {
+      const property = parsePropertyAccessExpression(expression.whenTrue);
+      whenTrue =
+        typeof property === 'string'
+          ? ts.factory.createStringLiteral(property, true)
+          : property;
+    }
+
+    if (isPropertyAccessExpression(expression.whenFalse)) {
+      const property = parsePropertyAccessExpression(expression.whenFalse);
+      whenFalse =
+        typeof property === 'string'
+          ? ts.factory.createStringLiteral(property, true)
+          : property;
+    }
     return ts.factory.createConditionalExpression(
       expression.condition,
       ts.factory.createToken(ts.SyntaxKind.QuestionToken),
@@ -710,9 +741,7 @@ export function transformCSSModuleToClass(
   function extractClassNames(sourceFile: ts.SourceFile) {
     let classNames = sourceCode;
     function visit(node: ts.Node) {
-      if (
-        ts.isJsxAttribute(node) &&
-        (node.name.getText() === 'className')) {
+      if (ts.isJsxAttribute(node) && node.name.getText() === 'className') {
         if (!node.initializer) {
           return;
         }
@@ -721,10 +750,16 @@ export function transformCSSModuleToClass(
           if (typeof expression === 'string') {
             classNames = expression;
           } else {
-            const printer = ts.createPrinter({ newLine: ts.NewLineKind.LineFeed });
+            const printer = ts.createPrinter({
+              newLine: ts.NewLineKind.LineFeed,
+            });
             // 将新的 Expression 节点转换为源码字符串
-            const newExpressionText = printer.printNode(ts.EmitHint.Unspecified, expression, sourceFile);
-            classNames = newExpressionText
+            const newExpressionText = printer.printNode(
+              ts.EmitHint.Unspecified,
+              expression,
+              sourceFile,
+            );
+            classNames = newExpressionText;
           }
         }
       }
@@ -738,9 +773,7 @@ export function transformCSSModuleToClass(
   function transformer(context: ts.TransformationContext) {
     return (rootNode: ts.Node) => {
       function visit(node: ts.Node): ts.Node {
-        if (
-          ts.isJsxAttribute(node) &&
-          (node.name.getText() === 'className')) {
+        if (ts.isJsxAttribute(node) && node.name.getText() === 'className') {
           if (!node.initializer) return node;
           let transform: any;
           if (ts.isJsxExpression(node.initializer)) {
@@ -778,16 +811,14 @@ export function transformCSSModuleToClass(
   } else {
     const printer = ts.createPrinter();
     const result = ts.transform(sourceFile, [transformer]);
-    return printer.printFile(result.transformed[0] as any)
+    return printer.printFile(result.transformed[0] as any);
   }
-
-
 }
 
 // Test code
 const testCode =
-  "{`${style.class1} ${style.class2}`}";
-const res = transformCSSModuleToClass(testCode, {
-  onlyClassName: true
+  "{`class1 ${condition ? `nested-${nestedCondition ? 'true' : 'false'}` : ''}`}";
+const res = transformClassToCSSModule(testCode, {
+  onlyClassName: true,
 });
 console.log(res);
